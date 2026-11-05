@@ -1,16 +1,32 @@
 # Media Download API
 
-Lightweight FastAPI backend using yt-dlp and FFmpeg. Supports public media URLs from YouTube, Instagram, TikTok, X/Twitter, and Facebook, subject to each platform's access rules.
+A lightweight FastAPI media-download backend built with **yt-dlp** and **FFmpeg**. It accepts public media URLs from YouTube, Instagram, TikTok, X/Twitter, and Facebook, subject to each platform's access rules and availability.
+
+Only download media you own or are authorized to save. This service does not support private/login-only content or bypass platform access controls.
+
+## Features
+
+- MP4 video downloads with best, 1080, 720, 480, and 360 quality selection.
+- MP3 audio extraction.
+- Single-item downloads (playlists are disabled).
+- 15-minute duration and 500 MB output-size limits.
+- URL host validation, optional API-key protection, CORS allowlisting, and bounded concurrent processing.
+- Temporary per-request directories, removed after the response is sent.
+- Docker image with FFmpeg included.
 
 ## API
 
-### `GET /health`
+### GET /
 
-Returns `{"status":"ok","service":"Media Download API"}`.
+Returns service name, version, and API documentation paths.
 
-### `POST /api/download`
+### GET /health
 
-JSON body:
+Returns service status and whether FFmpeg is available.
+
+### POST /api/download
+
+Request:
 
 ```json
 {
@@ -20,13 +36,15 @@ JSON body:
 }
 ```
 
-- `quality`: `best`, `1080`, `720`, `480`, or `360`
-- `format`: `mp4` or `mp3`
-- Optional API key: send `x-api-key: YOUR_API_KEY` when `API_KEY` is configured.
-- The endpoint returns the media file as an attachment. Temporary files are deleted after the response finishes.
-- Maximum duration: 15 minutes. Maximum file size: 500 MB.
+Fields:
 
-Example:
+| Field | Values | Default |
+| --- | --- | --- |
+| url | Supported public media URL | Required |
+| quality | best, 1080, 720, 480, 360 | best |
+| format | mp4, mp3 | mp4 |
+
+The endpoint responds with the media as an attachment. For example:
 
 ```bash
 curl -X POST "http://localhost:8000/api/download" \
@@ -36,62 +54,58 @@ curl -X POST "http://localhost:8000/api/download" \
   --output video.mp4
 ```
 
+Common errors:
+
+- 401: API key is missing or invalid when API-key protection is enabled.
+- 422: URL is unsupported, media is unavailable, or processing was rejected.
+- 429: all download slots are busy; retry after the supplied Retry-After interval.
+- 500: unexpected processing failure.
+
 ## Run locally
 
-Requires Python 3.11+ and FFmpeg installed on your machine.
+Requires Python 3.11+ and FFmpeg on your system.
 
 ```bash
 python -m venv .venv
-# Windows: .venv\\Scripts\\activate
-# macOS/Linux: source .venv/bin/activate
+# Windows:
+.venv\\Scripts\\activate
+# macOS/Linux:
+source .venv/bin/activate
+
 pip install -r requirements.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Open `http://localhost:8000/docs` for interactive API documentation.
+Open http://localhost:8000/docs for interactive API documentation.
 
 ## Environment variables
 
 | Variable | Purpose |
 | --- | --- |
-| `API_KEY` | Optional shared API key. If set, every download request must send it in `x-api-key`. |
-| `CORS_ORIGINS` | Comma-separated allowed origins. Defaults to localhost ports 3000 and 5173. |
-| `FRONTEND_ORIGIN` | Optional additional frontend origin, e.g. `https://your-site.example`. |
-| `PORT` | HTTP port; hosting platforms normally provide this automatically. |
+| API_KEY | Optional shared key. When configured, requests must send it in x-api-key. |
+| CORS_ORIGINS | Comma-separated allowed browser origins. |
+| FRONTEND_ORIGIN | Optional additional frontend origin. |
+| MAX_CONCURRENT_DOWNLOADS | Maximum simultaneous media-processing jobs (default: 2). |
 
-Set a strong, private `API_KEY` in the hosting provider's environment settings. Do not put a shared API key in browser-side JavaScript: visitors can inspect it. For a public frontend, put the API behind your own authenticated server/proxy or use per-user authentication and rate limiting.
+Do not expose a shared API key in frontend JavaScript. Browser users can inspect it. For a public frontend, put the backend behind an authenticated server/proxy or implement per-user authentication, rate limits, quotas, and abuse monitoring.
 
-## Deploy on Render (free tier, when available)
+## Docker
 
-1. Push this repository to GitHub.
-2. In Render, choose **New → Web Service** and connect this repository.
-3. Select **Docker** as the runtime. Render will build the included `Dockerfile`.
-4. Choose the Free instance type if it is offered for your account/region.
-5. Add environment variables:
-   - `API_KEY`: generate a long random secret.
-   - `FRONTEND_ORIGIN`: your exact frontend origin, such as `https://your-frontend.onrender.com`.
-   - Optionally set `CORS_ORIGINS` to a comma-separated list of your frontend and any required local development origins.
-6. Deploy. Test `https://YOUR-SERVICE.onrender.com/health`.
-7. Configure your frontend to POST to `https://YOUR-SERVICE.onrender.com/api/download`.
+```bash
+docker build -t media-download-api .
+docker run --rm -p 8000:8000 \
+  -e API_KEY="replace-with-a-long-random-secret" \
+  -e FRONTEND_ORIGIN="https://your-frontend.example" \
+  media-download-api
+```
 
-Free instances may sleep, have limited memory/runtime, and are not suitable for large or frequent downloads. Temporary local files are ephemeral.
+FFmpeg is installed in the included Docker image. Deploy the repository as a Docker web service on a host that supports persistent process execution and sufficient temporary disk space. Configure API_KEY and the exact frontend origin in the hosting provider's environment settings.
 
-## Deploy on Railway
+## Deployment notes
 
-1. Push this repository to GitHub and create a Railway project.
-2. Choose **Deploy from GitHub Repo** and select this repository.
-3. Railway detects the Dockerfile and builds the container (confirm Dockerfile as the builder if prompted).
-4. In **Variables**, set `API_KEY`, `FRONTEND_ORIGIN`, and optionally `CORS_ORIGINS`.
-5. In **Settings → Networking**, generate a public domain.
-6. Deploy and test `https://YOUR-DOMAIN/health`.
-
-Railway generally offers usage-based trial/credit plans rather than a permanently free hosting tier; check its current pricing before deploying.
-
-## Production notes
-
-- yt-dlp and social platforms change frequently; keep yt-dlp updated if extractors stop working.
-- Only download content you own or are authorized to download, and comply with the platforms' terms and applicable law.
-- Platform login-required/private content is not supported by this public endpoint.
-- A shared API key and CORS are not user authentication. Add rate limiting, per-user authentication, request concurrency limits, and abuse monitoring before exposing this service publicly.
-- The service rejects unsupported URL hosts and non-standard ports. Do not add arbitrary URL support without SSRF protections.
-- Downloads are processed synchronously in the request and returned when complete. Hosting request timeouts and memory/disk quotas can still interrupt long jobs.
+- The service listens on the host-provided PORT (default 8000).
+- Keep yt-dlp updated; social platforms frequently change their extractors.
+- Free hosting plans may sleep, impose request timeouts, or restrict CPU, memory, and temporary disk. Large downloads may fail on those plans.
+- The endpoint processes a download synchronously and streams the completed file as the response. It is not a background job queue.
+- The service deliberately rejects unsupported hosts, non-standard ports, IP-address URLs, private content, and login-only content.
+- API-key protection and CORS are not substitutes for user authentication or rate limiting.
